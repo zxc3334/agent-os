@@ -13,17 +13,23 @@ import {
     ThrottledCardUpdater,
 } from "./im/card.js";
 import { resolveMentions, extractResourceKeys } from "./im/message-parser.js";
-import { parseCommand } from "./core/command-parser.js";
+import { parseCliRequest, parseCommand } from "./core/command-parser.js";
+import { getCliAdapter, listCliAdapters, parseCliId } from "./cli/registry.js";
 import { SessionManager, type Session } from "./core/session-manager.js";
 import { JsonSessionStore } from "./core/session-store.js";
 import { TaskProgressTracker } from "./core/task-progress.js";
 import { requestTaskAbort, type ActiveRun } from "./core/task-abort.js";
 import { ClaudeAdapter } from "./cli/claude-adapter.js";
+import type { CliAdapter } from "./cli/types.js";
 import { runCli } from "./cli/runner.js";
 
 const appId = process.env.BOT_A_APP_ID;
 const appSecret = process.env.BOT_A_APP_SECRET;
-const cliWorkdir = resolve(process.env.CLAUDE_WORKDIR ?? process.cwd());
+const cliWorkdir = resolve(
+    process.env.CLI_WORKDIR ?? process.env.CLAUDE_WORKDIR ?? process.cwd(),
+);
+const defaultCliId = parseCliId(process.env.DEFAULT_CLI);
+
 const cliAdapter = new ClaudeAdapter();
 
 if (!appId || !appSecret) {
@@ -31,7 +37,13 @@ if (!appId || !appSecret) {
     process.exit(1);
 }
 console.log("Agent OS 启动，正在建立飞书长连接…");
-console.log(`[CLI] command=${cliAdapter.command} cwd=${cliWorkdir}`);
+console.log(`[CLI] default=${defaultCliId}`);
+for (const adapter of listCliAdapters()) {
+    console.log(
+        `[CLI] id=${adapter.id} command=${adapter.command} cwd=${cliWorkdir}`,
+    );
+}
+
 
 const sessions = await SessionManager.open({
     store: new JsonSessionStore(join("data", "sessions.json")),
@@ -41,13 +53,14 @@ const activeRuns = new Map<string, ActiveRun>();
 const contextWindows = new Map<string, number>();
 
 function executeCli(
+    adapter: CliAdapter,
     prompt: string,
     sessionId: string | undefined,
     signal: AbortSignal,
     onEvent: Parameters<typeof runCli>[0]["onEvent"],
 ) {
     return runCli({
-        adapter: cliAdapter,
+        adapter,
         prompt,
         cwd: cliWorkdir,
         sessionId,
@@ -55,6 +68,7 @@ function executeCli(
         onEvent,
     });
 }
+
 
 const STATUS_LABELS: Record<Session["status"], string> = {
     creating: "创建中",
@@ -64,15 +78,17 @@ const STATUS_LABELS: Record<Session["status"], string> = {
 };
 
 function formatSessionStatus(session: Session): string {
+    const adapter = getCliAdapter(session.cliId);
     return [
         `会话：${session.id}`,
         `状态：${STATUS_LABELS[session.status]}`,
-        `执行引擎：${session.cliId}`,
+        `执行引擎：${adapter.displayName}`,
         `CLI 会话：${session.cliSessionId ?? "(尚未建立)"}`,
         `话题：${session.threadId}`,
         `更新时间：${session.updatedAt}`,
     ].join("\n");
 }
+
 
 async function markSessionIdle(sessionId: string): Promise<void> {
     if (sessions.get(sessionId)?.status !== "active") return;
@@ -110,10 +126,22 @@ startBot({
     onMessage: async (msg, bot) => {
         const resolved = resolveMentions(msg.text, msg.mentions);
         const hasThread = !!msg.threadId || !!msg.rootId;
-        const { session, isNew } = await sessions.resolve(msg);
-        console.log(
-            `[收到] chat=${msg.chatId} threadId=${msg.threadId} rootId=${msg.rootId} sender=${msg.senderOpenId}`,
+        const cliRequest = parseCliRequest(resolved);
+        if (cliRequest && !cliRequest.prompt) {
+            await bot.reply(
+                msg.messageId,
+                `请在 /${cliRequest.cliId} 后面写下任务，例如：/${cliRequest.cliId} 检查项目状态`,
+                hasThread,
+            );
+            return;
+        }
+        const { session, isNew } = await sessions.resolve(
+            msg,
+            cliRequest?.cliId ?? defaultCliId,
         );
+        const cliAdapter = getCliAdapter(session.cliId);
+        const prompt = cliRequest?.prompt ?? resolved;
+
         console.log(`  原文: ${msg.text}`);
         console.log(`  还原: ${resolved}`);
         console.log(
@@ -122,12 +150,21 @@ startBot({
         console.log(
             `  [会话] ${isNew ? "新建" : "复用"} id=${session.id} status=${session.status}`,
         );
+        if (!isNew && cliRequest && cliRequest.cliId !== session.cliId) {
+            await bot.reply(
+                msg.messageId,
+                `当前话题已经在使用 ${cliAdapter.displayName}。如需切换执行引擎，请新开一个话题。`,
+                hasThread,
+            );
+            return;
+        }
 
         const command = parseCommand(resolved);
         if (command?.name === "help") {
             await bot.reply(
                 msg.messageId,
-                ["/status 查看当前会话", "/close 关闭当前会话", "/help 查看命令"].join(
+                ["/status 查看当前会话", "/close 关闭当前会话", "/help 查看命令", '/claude <任务> 新话题使用 Claude Code',
+                    '/codex <任务> 新话题使用 Codex',].join(
                     "\n",
                 ),
                 hasThread,
@@ -245,7 +282,7 @@ startBot({
             const snapshot = progress.snapshot();
             cardUpdater.push(
                 buildTaskCard({
-                    title: "Claude Code",
+                    title: cliAdapter.displayName,
                     status: "running",
                     detail: snapshot.current,
                     progress: snapshot,
@@ -257,7 +294,8 @@ startBot({
         progressHeartbeat.unref();
 
         // 让事件回调尽快返回，Claude Code 在后台继续执行。
-        void executeCli(resolved, session.cliSessionId, run.signal, (event) => {
+        void executeCli(cliAdapter, prompt, session.cliSessionId, run.signal, (event) => {
+
             if (
                 event.type !== "tool_start" &&
                 event.type !== "tool_end" &&
@@ -294,7 +332,10 @@ startBot({
                         await bot.reply(msg.messageId, chunk, hasThread);
                     }
                 }
-                console.log(`[CLI] 完成 session_id=${result.sessionId ?? "(无)"}`);
+                console.log(
+                    `[CLI] ${cliAdapter.id} 完成 session_id=${result.sessionId ?? "(无)"}`,
+                );
+
             })
             .catch(async (error) => {
                 clearInterval(progressHeartbeat);

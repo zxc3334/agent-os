@@ -1,4 +1,4 @@
-export type CliId = "claude";
+export type CliId = "claude" | "codex";
 
 export interface CliRunStats {
     durationMs?: number;
@@ -30,6 +30,8 @@ export interface CliAdapter {
     readonly id: CliId;
     readonly command: string;
     readonly displayName: string;
+    /** 子进程额外环境变量（如 codex 专用代理），spawn 时合并，不影响主进程 */
+    readonly env?: Record<string, string>;
     buildArgs(prompt: string): string[];
     buildResumeArgs(prompt: string, sessionId: string): string[];
     parseEvents(line: string): CliEvent[];
