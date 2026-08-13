@@ -116,8 +116,24 @@ function parseStats(event: ClaudeEvent): CliRunStats | undefined {
 }
 
 function outputArgs(prompt: string): string[] {
+  // root 下 claude 拒绝 --dangerously-skip-permissions（安全限制）。
+  // 改用 --allowedTools 白名单：允许常用开发工具，headless 下不弹确认。
   return [
-    '--dangerously-skip-permissions',
+    '--allowedTools',
+    [
+      'Bash',
+      'Read',
+      'Write',
+      'Edit',
+      'Glob',
+      'Grep',
+      'WebFetch',
+      'WebSearch',
+      'Task',
+      'Agent',
+      'NotebookEdit',
+      'Skill',
+    ].join(','),
     '-p',
     prompt,
     '--output-format',
