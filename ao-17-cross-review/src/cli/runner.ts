@@ -1,6 +1,7 @@
 import { spawnCli } from './spawn-cli.js';
 import { createInterface } from 'node:readline';
 import type { CliAdapter, CliEvent, CliRunResult } from './types.js';
+
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
 export interface RunCliOptions {
@@ -32,9 +33,6 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
       cwd,
       signal,
       stdio: ['ignore', 'pipe', 'pipe'],
-      // 合并 adapter 声明的环境变量（如 codex 专用代理），
-      // 只影响子进程，不影响主进程（飞书连接保持直连）。
-      env: { ...process.env, ...adapter.env },
     });
     const lines = createInterface({ input: child.stdout });
     let observedSessionId = sessionId;

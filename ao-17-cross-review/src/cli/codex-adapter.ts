@@ -88,12 +88,6 @@ export class CodexAdapter implements CliAdapter {
   readonly id = 'codex' as const;
   readonly command = 'codex';
   readonly displayName = 'Codex';
-  readonly env: Record<string, string> | undefined = (() => {
-    const proxy = process.env.CODEX_PROXY;
-    return proxy
-      ? { HTTP_PROXY: proxy, HTTPS_PROXY: proxy }
-      : undefined;
-  })();
 
   buildArgs(prompt: string): string[] {
     return [

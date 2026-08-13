@@ -1,14 +1,15 @@
 {
   "name": "agent-os",
   "version": "0.1.0",
-  "description": "Agent OS —— 个人生产系统",
+  "description": "Agent OS — 你的个人生产系统（《Agent OS 个人生产系统实战》配套项目）",
   "type": "module",
   "scripts": {
     "dev": "pnpm start",
     "start": "tsx watch --include .env --include \"config/*.json\" src/index.ts",
     "start:once": "tsx src/index.ts",
-    "probe:cli": "tsx src/probe-cli.ts",
-    "build": "tsc"
+    "probe": "tsx src/probe-lark.ts",
+    "build": "tsc",
+    "probe:cli": "tsx src/probe-cli.ts"
   },
   "engines": {
     "node": ">=22"
