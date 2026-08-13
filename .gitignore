@@ -4,3 +4,4 @@ dist/
 config/bots.json
 data/
 *.log
+ao-17-cross-review/
